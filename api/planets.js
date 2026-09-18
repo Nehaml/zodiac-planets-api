@@ -1,14 +1,11 @@
-// Vercel serverless function — proxies NASA JPL Horizons API
-// Returns geocentric tropical zodiac positions for all planets
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Cache-Control', 's-maxage=3600');
 
   const BODIES = {
-    Sun:'10',Moon:'301',Mercury:'199',Venus:'299',Mars:'499',
-    Jupiter:'599',Saturn:'699',Uranus:'799',Neptune:'899',Pluto:'999',
+    Sun:'10', Moon:'301', Mercury:'199', Venus:'299', Mars:'499',
+    Jupiter:'599', Saturn:'699', Uranus:'799', Neptune:'899', Pluto:'999',
   };
 
   const SIGNS = ['Aries','Taurus','Gemini','Cancer','Leo','Virgo','Libra','Scorpio','Sagittarius','Capricorn','Aquarius','Pisces'];
@@ -42,6 +39,10 @@ export default async function handler(req, res) {
     return null;
   }
 
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async function fetchPlanet(code) {
     const now = new Date();
     const start = now.toISOString().split('T')[0];
@@ -54,20 +55,32 @@ export default async function handler(req, res) {
 
   try {
     const results = {};
-    const entries = Object.entries(BODIES);
-    const fetched = await Promise.all(
-      entries.map(([name, code]) =>
-        fetchPlanet(code)
-          .then(lon => ({ name, lon, ok: lon !== null }))
-          .catch(() => ({ name, lon: null, ok: false }))
-      )
-    );
-    for (const { name, lon, ok } of fetched) {
-      results[name] = ok && lon !== null
-        ? { longitude: lon, sign: lonToSign(lon), degree: lonToDeg(lon) }
-        : { error: 'fetch failed' };
+
+    // Fetch one by one with delay to avoid rate limiting
+    for (const [name, code] of Object.entries(BODIES)) {
+      try {
+        const lon = await fetchPlanet(code);
+        if (lon !== null) {
+          results[name] = {
+            longitude: lon,
+            sign: lonToSign(lon),
+            degree: lonToDeg(lon),
+          };
+        } else {
+          results[name] = { error: 'parse failed' };
+        }
+      } catch (e) {
+        results[name] = { error: e.message };
+      }
+      await sleep(200); // 200ms gap between each request
     }
-    res.status(200).json({ success: true, date: new Date().toISOString(), planets: results });
+
+    res.status(200).json({
+      success: true,
+      date: new Date().toISOString(),
+      planets: results,
+    });
+
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
