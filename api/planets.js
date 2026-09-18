@@ -26,16 +26,34 @@ export default async function handler(req, res) {
     if (soe === -1 || eoe === -1) return null;
     const block = text.substring(soe + 5, eoe).trim();
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+
     for (const line of lines) {
-      const parts = line.split(/\s+/);
+      // Skip date/time lines
+      if (line.match(/^\d{4}-[A-Za-z]/) || line.match(/^[A-Za-z]{3}\s+\d/)) continue;
+
+      const parts = line.split(/[\s,]+/);
       for (let i = 0; i < parts.length; i++) {
         const val = parseFloat(parts[i]);
-        if (!isNaN(val) && val >= 0 && val < 360) {
+        // Must be a valid longitude (greater than 0.01 to skip false zeros)
+        if (!isNaN(val) && val > 0.01 && val < 360) {
           const next = parseFloat(parts[i + 1]);
-          if (!isNaN(next) && next >= -90 && next <= 90) return val;
+          if (!isNaN(next) && next >= -90 && next <= 90) {
+            return val;
+          }
         }
       }
     }
+
+    // Fallback: scan entire block for any lon/lat pair
+    const matches = [...block.matchAll(/(\d{1,3}\.\d+)\s+([-+]?\d{1,2}\.\d+)/g)];
+    for (const m of matches) {
+      const lon = parseFloat(m[1]);
+      const lat = parseFloat(m[2]);
+      if (lon > 0.01 && lon < 360 && lat >= -90 && lat <= 90) {
+        return lon;
+      }
+    }
+
     return null;
   }
 
@@ -50,13 +68,16 @@ export default async function handler(req, res) {
     const url = `https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND='${code}'&CENTER='500@399'&EPHEM_TYPE='OBSERVER'&QUANTITIES='31'&START_TIME='${start}'&STOP_TIME='${stop}'&STEP_SIZE='1d'&OBJ_DATA='NO'&MAKE_EPHEM='YES'`;
     const r = await fetch(url);
     const data = await r.json();
+
+    // Log raw result for debugging
+    console.log(`${code}:`, data.result?.substring(0, 500));
+
     return parseLon(data.result || '');
   }
 
   try {
     const results = {};
 
-    // Fetch one by one with delay to avoid rate limiting
     for (const [name, code] of Object.entries(BODIES)) {
       try {
         const lon = await fetchPlanet(code);
@@ -72,7 +93,7 @@ export default async function handler(req, res) {
       } catch (e) {
         results[name] = { error: e.message };
       }
-      await sleep(200); // 200ms gap between each request
+      await sleep(300);
     }
 
     res.status(200).json({
